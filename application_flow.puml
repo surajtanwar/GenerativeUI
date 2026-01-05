@@ -1,0 +1,188 @@
+@startuml Application Flow Diagram
+
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam activityBorderColor #333333
+skinparam activityBackgroundColor #E8F4F8
+skinparam activityDiamondBackgroundColor #FFF4E6
+skinparam activityStartEndColor #4A90E2
+skinparam activityArrowColor #333333
+skinparam shadowing false
+
+title Generative UI Application Flow
+
+start
+
+:User opens Chat interface;
+
+:User types message\n(optional: selects image file);
+
+partition "Client Side (Chat Component)" {
+  :Convert file to base64\n(if file selected);
+  
+  :Call actions.agent()\nvia useActions hook;
+  note right
+    actions comes from
+    AIProvider context
+  end note
+}
+
+partition "Server Side (Agent Action)" {
+  :agent() server action receives\n{input, chat_history, file};
+  
+  :processFile() function:
+  - Convert chat_history tuples
+    to LangChain messages
+  - If file exists, create
+    HumanMessage with image_url;
+  
+  :Call streamRunnableUI()\nwith agentExecutor() and inputs;
+}
+
+partition "streamRunnableUI Processing" {
+  :Create streamable UI:\nui = createStreamableUI();
+  
+  :Create promise resolver:\n[lastEvent, resolve] = withResolvers();
+  
+  :Initialize callbacks map\nfor text streaming;
+  
+  :Start async loop:\nstreamEvents() with version "v2";
+}
+
+partition "LangGraph Execution" {
+  :Execute agentExecutor() workflow;
+  
+  :START → invokeModel node;
+  
+  :invokeModel():
+  - Build ChatPromptTemplate
+  - Bind tools to LLM (GPT-4o)
+  - Invoke chain with input & history;
+  
+  :LLM processes request;
+  
+  if (LLM decides to use tool?) then (yes)
+    :Update state with toolCall\n{name, parameters};
+    
+    :Conditional routing:\ninvokeToolsOrReturn();
+    
+    :Route to invokeTools node;
+    
+    :invokeTools():
+    - Map tool name to tool instance
+    - Call selectedTool.invoke();
+    
+    partition "Tool Execution" {
+      :Tool dispatches custom event:\ndispatchCustomEvent(\n  "__yield_ui__",\n  {value: <LoadingComponent>,\n   type: "append"}\n);
+      
+      :Tool executes logic:\n(API calls, data fetching);
+      
+      :Tool dispatches custom event:\ndispatchCustomEvent(\n  "__yield_ui__",\n  {value: <ResultComponent>,\n   type: "update"}\n);
+      
+      :Return toolResult as JSON;
+    }
+    
+    :Update state with toolResult;
+    
+    :END node reached;
+    
+  else (no - text response)
+    :Update state with result\n(plain text content);
+    
+    :END node reached;
+  endif
+}
+
+partition "Event Processing Loop" {
+  while (StreamEvent available?) is (yes)
+    if (Event type?) then (Custom UI Event)
+      if (name === "__yield_ui__"?) then (yes)
+        if (type === "append"?) then (yes)
+          :ui.append(ReactComponent);
+          note right
+            Add new component
+            (Loading, Weather, etc.)
+          end note
+        else (update)
+          :ui.update(ReactComponent);
+          note right
+            Replace previous
+            component with data
+          end note
+        endif
+      endif
+      
+    else (Chat Model Stream)
+      if (event === "on_chat_model_stream"?) then (yes)
+        :Extract chunk.text from event;
+        
+        if (First chunk for this run_id?) then (yes)
+          :Create textStream = createStreamableValue();
+          :ui.append(<AIMessage value={textStream.value} />);
+          :Store in callbacks[run_id];
+        endif
+        
+        :callbacks[run_id].append(chunk.text);
+        note right
+          Stream text tokens
+          to AIMessage component
+        end note
+      endif
+    endif
+    
+    :Update lastEventValue = streamEvent;
+  endwhile (no)
+}
+
+:Resolve lastEvent promise:\nresolve(lastEventValue?.data.output);
+
+:Close all text streams:\ncallbacks.forEach(cb => cb.done());
+
+:Close main UI stream:\nui.done();
+
+:Return {ui: ui.value, lastEvent}\nto agent() function;
+
+partition "Client Side (Chat Component)" {
+  :Receive element from actions.agent();
+  
+  :Create new chat element:
+  - FileUploadMessage (if file)
+  - HumanMessageText (user input)
+  - element.ui (streaming AI response);
+  
+  fork
+    :Render element.ui\n(streams as events arrive);
+    note right
+      UI updates in real-time:
+      - Components appear
+      - Text streams token-by-token
+    end note
+  fork again
+    :Wait for lastEvent promise;
+    
+    if (lastEvent contains result?) then (yes)
+      :Update history with:\n["user", input]\n["assistant", result];
+    else (toolResult)
+      :Update history with:\n["user", input]\n["assistant", toolResult JSON];
+    endif
+  end fork
+  
+  :Add element to chat UI;
+  
+  :Clear input field;
+  
+  :Display updated chat interface\nwith generative UI components;
+}
+
+:User sees final result:
+- Weather cards
+- GitHub repo info
+- Web page previews
+- Invoice displays
+- Streaming text responses;
+
+stop
+
+@enduml
+
+

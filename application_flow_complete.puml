@@ -1,0 +1,266 @@
+@startuml Complete Application Flow Diagram
+
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam activityBorderColor #333333
+skinparam activityBackgroundColor #E8F4F8
+skinparam activityDiamondBackgroundColor #FFF4E6
+skinparam activityStartEndColor #4A90E2
+skinparam activityArrowColor #333333
+skinparam shadowing false
+
+title Generative UI Application - Complete Flow with Role-Based Theming
+
+start
+
+:User opens Chat interface;
+
+partition "User Role Management" {
+  :User selects role\n(Parent/Child/Guest)\nor role detected from query;
+  note right
+    Role can be:
+    - Selected via UI
+    - Detected from query keywords
+    - Default: Guest
+  end note
+  
+  :Create UserProfile\nwith role-specific permissions;
+  note right
+    Parent: Full access
+    Child: Limited access
+    Guest: Basic access
+  end note
+}
+
+:User types message\n(optional: selects image file);
+
+partition "Client Side (Chat Component)" {
+  :Convert file to base64\n(if file selected);
+  
+  :Prepare request:
+  - input text
+  - chat_history
+  - file (if exists)
+  - userProfile;
+  
+  :Call actions.agent()\nvia useActions hook;
+  note right
+    actions comes from
+    AIProvider context
+  end note
+}
+
+partition "Server Side (Agent Action)" {
+  :agent() server action receives\n{input, chat_history, file, userProfile};
+  
+  :processFile() function:
+  - Convert chat_history tuples
+    to LangChain messages
+  - If file exists, create
+    HumanMessage with image_url
+  - Include userProfile in state;
+  
+  :Call streamRunnableUI()\nwith agentExecutor() and inputs;
+}
+
+partition "streamRunnableUI Processing" {
+  :Create streamable UI:\nui = createStreamableUI();
+  
+  :Create promise resolver:\n[lastEvent, resolve] = withResolvers();
+  
+  :Initialize callbacks map\nfor text streaming;
+  
+  :Start async loop:\nstreamEvents() with version "v2";
+}
+
+partition "LangGraph Execution" {
+  :Execute agentExecutor() workflow;
+  
+  :START → invokeModel node;
+  
+  :invokeModel():
+  - Build ChatPromptTemplate
+    with system prompt
+  - Filter tools based on
+    userProfile permissions
+  - Bind available tools to LLM (GPT-4o)
+  - Invoke chain with input & history;
+  note right
+    Tools filtered by role:
+    - Parent: All tools
+    - Child: Weather only
+    - Guest: Weather only
+  end note
+  
+  :LLM processes request\nwith role context;
+  
+  if (LLM decides to use tool?) then (yes)
+    :Update state with toolCall\n{name, parameters};
+    
+    :Conditional routing:\ninvokeToolsOrReturn();
+    
+    :Route to invokeTools node;
+    
+    :invokeTools():
+    - Map tool name to tool instance
+    - Pass userProfile in config metadata
+    - Call selectedTool.invoke();
+    
+    partition "Tool Execution" {
+      if (Tool is menuGenerator?) then (yes)
+        :Detect role from query\n(detectRoleFromQuery);
+        note right
+          Check for keywords:
+          - Parent: "parent", "advanced", "full control"
+          - Child: "child", "simple", "safe"
+          - Guest: "guest", "temporary", "quick"
+        end note
+        
+        :Determine final role:
+        Priority 1: Query detection
+        Priority 2: Config userProfile
+        Priority 3: Default guest;
+        
+        :Generate menu structure\nbased on role:
+        - Parent: Full hierarchy
+        - Child: Simplified
+        - Guest: Quick access;
+        
+        :Show loading state:\ndispatchCustomEvent\n(HierarchicalMenuLoading);
+        
+        :Generate menu with role context:
+        - Menu structure
+        - Breadcrumb
+        - Design intent
+        - Restrictions;
+        
+        :Show menu with theme:\ndispatchCustomEvent\n(HierarchicalMenu with theme);
+        note right
+          Theme applied:
+          - Parent: Green
+          - Child: Blue
+          - Guest: Gray
+        end note
+      else (Other tools)
+        :Tool dispatches custom event:\ndispatchCustomEvent(\n  "__yield_ui__",\n  {value: <LoadingComponent>,\n   type: "append"}\n);
+        
+        :Tool executes logic:\n(API calls, data fetching);
+        
+        :Tool dispatches custom event:\ndispatchCustomEvent(\n  "__yield_ui__",\n  {value: <ResultComponent>,\n   type: "update"}\n);
+      endif
+      
+      :Return toolResult as JSON;
+    }
+    
+    :Update state with toolResult;
+    
+    :END node reached;
+    
+  else (no - text response)
+    :Update state with result\n(plain text content);
+    
+    :END node reached;
+  endif
+}
+
+partition "Event Processing Loop" {
+  while (StreamEvent available?) is (yes)
+    if (Event type?) then (Custom UI Event)
+      if (name === "__yield_ui__"?) then (yes)
+        if (type === "append"?) then (yes)
+          :ui.append(ReactComponent);
+          note right
+            Add new component
+            (Loading, Weather, Menu, etc.)
+            with role-based theme
+          end note
+        else (update)
+          :ui.update(ReactComponent);
+          note right
+            Replace previous
+            component with data
+            Theme preserved from role
+          end note
+        endif
+      endif
+      
+    else (Chat Model Stream)
+      if (event === "on_chat_model_stream"?) then (yes)
+        :Extract chunk.text from event;
+        
+        if (First chunk for this run_id?) then (yes)
+          :Create textStream = createStreamableValue();
+          :ui.append(<AIMessage value={textStream.value} />);
+          :Store in callbacks[run_id];
+        endif
+        
+        :callbacks[run_id].append(chunk.text);
+        note right
+          Stream text tokens
+          to AIMessage component
+        end note
+      endif
+    endif
+    
+    :Update lastEventValue = streamEvent;
+  endwhile (no)
+}
+
+:Resolve lastEvent promise:\nresolve(lastEventValue?.data.output);
+
+:Close all text streams:\ncallbacks.forEach(cb => cb.done());
+
+:Close main UI stream:\nui.done();
+
+:Return {ui: ui.value, lastEvent}\nto agent() function;
+
+partition "Client Side (Chat Component)" {
+  :Receive element from actions.agent();
+  
+  :Create new chat element:
+  - FileUploadMessage (if file)
+  - HumanMessageText (user input)
+  - element.ui (streaming AI response);
+  
+  fork
+    :Render element.ui\n(streams as events arrive);
+    note right
+      UI updates in real-time:
+      - Components appear with role theme
+      - Menu shows role-appropriate structure
+      - Colors match role (Green/Blue/Gray)
+      - Text streams token-by-token
+    end note
+  fork again
+    :Wait for lastEvent promise;
+    
+    if (lastEvent contains result?) then (yes)
+      :Update history with:\n["user", input]\n["assistant", result];
+    else (toolResult)
+      :Update history with:\n["user", input]\n["assistant", toolResult JSON];
+    endif
+  end fork
+  
+  :Add element to chat UI;
+  
+  :Clear input field;
+  
+  :Display updated chat interface\nwith role-themed UI components;
+}
+
+:User sees final result:
+- Role-themed menu (Green/Blue/Gray)
+- Weather cards
+- GitHub repo info
+- Web page previews
+- Invoice displays
+- Streaming text responses;
+
+stop
+
+@enduml
+
+
+
+
+

@@ -1,0 +1,136 @@
+@startuml Application Architecture Diagram
+
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam componentStyle rectangle
+skinparam linetype ortho
+
+package "Client Side" {
+  [Chat Component] as Chat
+  [User Selector] as UserSelector
+  [Message Components] as Messages
+  [Prebuilt UI Components] as PrebuiltUI
+  [AIProvider Context] as AIProvider
+}
+
+package "Server Side" {
+  [Agent Action] as Agent
+  [streamRunnableUI] as StreamUI
+  [processFile] as ProcessFile
+}
+
+package "LangGraph Workflow" {
+  [StateGraph] as Graph
+  [invokeModel Node] as ModelNode
+  [invokeTools Node] as ToolsNode
+  [invokeToolsOrReturn] as Conditional
+}
+
+package "LLM & Tools" {
+  [ChatOpenAI (GPT-4o)] as LLM
+  [Weather Tool] as Weather
+  [GitHub Tool] as GitHub
+  [Web Scraping Tool] as Web
+  [Invoice Tool] as Invoice
+  [Menu Generator Tool] as MenuGen
+}
+
+package "Menu Generator Components" {
+  [detectRoleFromQuery] as RoleDetect
+  [generateMenuStructure] as GenMenu
+  [generateParentMenu] as ParentMenu
+  [generateChildMenu] as ChildMenu
+  [generateGuestMenu] as GuestMenu
+}
+
+package "UI Components" {
+  [HierarchicalMenu] as HierMenu
+  [HierarchicalMenuLoading] as MenuLoading
+  [WeatherCard] as WeatherCard
+  [AIMessage] as AIMessage
+}
+
+package "Role & Theme System" {
+  [UserProfile] as UserProfile
+  [Role Permissions] as Permissions
+  [Theme Colors] as Theme
+  [Role Detection] as RoleDet
+}
+
+' Client Side Connections
+Chat --> UserSelector : Uses
+Chat --> Messages : Renders
+Chat --> PrebuiltUI : Displays
+Chat --> AIProvider : Uses actions
+AIProvider --> Agent : Calls
+
+' Server Side Connections
+Agent --> ProcessFile : Processes input
+Agent --> StreamUI : Streams UI
+ProcessFile --> Graph : Passes to
+
+' LangGraph Workflow
+Graph --> ModelNode : START
+ModelNode --> Conditional : Routes
+Conditional --> ToolsNode : If tool needed
+Conditional --> Graph : If text response
+ToolsNode --> Graph : Returns result
+
+' LLM & Tools
+ModelNode --> LLM : Invokes
+LLM --> Weather : Can call
+LLM --> GitHub : Can call
+LLM --> Web : Can call
+LLM --> Invoice : Can call
+LLM --> MenuGen : Can call
+
+' Menu Generator Flow
+MenuGen --> RoleDetect : Detects role
+MenuGen --> GenMenu : Generates structure
+GenMenu --> ParentMenu : If parent role
+GenMenu --> ChildMenu : If child role
+GenMenu --> GuestMenu : If guest role
+MenuGen --> HierMenu : Renders menu
+MenuGen --> MenuLoading : Shows loading
+
+' Role System
+UserProfile --> Permissions : Contains
+UserProfile --> Theme : Determines
+RoleDetect --> UserProfile : Creates
+Graph --> UserProfile : Passes to tools
+MenuGen --> UserProfile : Uses for menu
+
+' UI Components
+Weather --> WeatherCard : Renders
+MenuGen --> HierMenu : Renders
+ModelNode --> AIMessage : Streams text
+HierMenu --> Theme : Applies colors
+
+' Theme Application
+Theme --> HierMenu : Green (Parent)
+Theme --> HierMenu : Blue (Child)
+Theme --> HierMenu : Gray (Guest)
+
+note right of RoleDetect
+  Detects role from query:
+  - "parent", "advanced" → Parent
+  - "child", "simple" → Child
+  - "guest", "temporary" → Guest
+end note
+
+note right of Theme
+  Role-based theming:
+  - Parent: Green theme
+  - Child: Blue theme
+  - Guest: Gray theme
+end note
+
+note right of MenuGen
+  Priority for role:
+  1. Query detection
+  2. UserProfile from config
+  3. Default to guest
+end note
+
+@enduml
+

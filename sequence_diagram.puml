@@ -1,0 +1,135 @@
+@startuml Generative UI Application Sequence Diagram
+
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 10
+skinparam maxmessagesize 60
+
+actor User
+participant "Chat Component\n(Client)" as Chat
+participant "AIProvider\n(Context)" as Provider
+participant "Agent Action\n(Server)" as Agent
+participant "streamRunnableUI\n(Server)" as StreamUI
+participant "LangGraph\nAgentExecutor" as Graph
+participant "invokeModel\nNode" as ModelNode
+participant "ChatOpenAI\n(LLM)" as LLM
+participant "invokeToolsOrReturn\n(Conditional)" as Conditional
+participant "invokeTools\nNode" as ToolsNode
+participant "Tools\n(GitHub/Weather/Web/Invoice)" as Tools
+participant "AIMessage\nComponent" as AIMessage
+participant "UI Components\n(Prebuilt)" as UIComponents
+
+User -> Chat: Submit input (+ optional file)
+activate Chat
+
+Chat -> Chat: Convert file to base64 (if exists)
+Chat -> Provider: actions.agent(input, history, file)
+activate Provider
+
+Provider -> Agent: agent(inputs)
+activate Agent
+
+Agent -> Agent: processFile(inputs)
+note right: Converts chat history\nto LangChain messages\nHandles file if present
+
+Agent -> StreamUI: streamRunnableUI(agentExecutor(), inputs)
+activate StreamUI
+
+StreamUI -> StreamUI: createStreamableUI()
+StreamUI -> StreamUI: createStreamableValue() for text streams
+
+StreamUI -> Graph: Execute LangGraph workflow
+activate Graph
+
+Graph -> ModelNode: invokeModel(state, config)
+activate ModelNode
+
+ModelNode -> ModelNode: Build ChatPromptTemplate\nwith system prompt & history
+ModelNode -> ModelNode: Bind tools to LLM\n(githubTool, weatherTool, etc.)
+
+ModelNode -> LLM: chain.invoke(input, chat_history)
+activate LLM
+
+LLM -> LLM: Process with GPT-4o\nDetermine if tool needed
+LLM --> ModelNode: Return result\n(tool_calls or text content)
+deactivate LLM
+
+alt Tool Call Detected
+    ModelNode --> Graph: Update state with toolCall
+    note right: {name, parameters}
+else Text Response
+    ModelNode --> Graph: Update state with result
+    note right: Plain text content
+end
+deactivate ModelNode
+
+Graph -> Conditional: invokeToolsOrReturn(state)
+activate Conditional
+
+alt Tool Call Exists
+    Conditional --> Graph: Route to "invokeTools"
+    Graph -> ToolsNode: invokeTools(state, config)
+    activate ToolsNode
+    
+    ToolsNode -> ToolsNode: Map tool name to tool instance
+    ToolsNode -> Tools: selectedTool.invoke(parameters)
+    activate Tools
+    
+    Tools -> Tools: Execute tool logic\n(e.g., API calls)
+    Tools -> StreamUI: dispatchCustomEvent\n(CUSTOM_UI_YIELD_NAME)
+    note right: Yield UI component\n(Loading state)
+    
+    Tools -> Tools: Fetch data\n(API calls, etc.)
+    Tools -> StreamUI: dispatchCustomEvent\n(CUSTOM_UI_YIELD_NAME)
+    note right: Yield UI component\n(Result with data)
+    
+    Tools --> ToolsNode: Return toolResult (JSON)
+    deactivate Tools
+    
+    ToolsNode --> Graph: Update state with toolResult
+    deactivate ToolsNode
+    
+    Graph --> StreamUI: Stream event: invokeTools
+else Text Result
+    Conditional --> Graph: Route to END
+    Graph --> StreamUI: Stream event: invokeModel
+end
+deactivate Conditional
+
+loop For each stream event
+    StreamUI -> StreamUI: Process streamEvent
+    
+    alt Custom UI Yield Event
+        StreamUI -> UIComponents: Append/Update UI component
+        note right: Weather, GitHub, Web, Invoice
+    else Chat Model Stream Event
+        StreamUI -> StreamUI: Create streamableValue for text
+        StreamUI -> AIMessage: Append AIMessage component
+        StreamUI -> AIMessage: Append text chunks
+        note right: Streaming text response
+    end
+    
+    StreamUI -> Chat: Stream UI updates
+end
+
+StreamUI -> StreamUI: Resolve lastEvent promise
+StreamUI -> StreamUI: Close all streams (done())
+StreamUI --> Agent: Return {ui, lastEvent}
+deactivate StreamUI
+deactivate Graph
+
+Agent --> Provider: Return streamable UI
+deactivate Agent
+
+Provider --> Chat: Return element with UI stream
+deactivate Provider
+
+Chat -> Chat: Append element to UI\n(Human message + AI response)
+Chat -> Chat: Wait for lastEvent\nUpdate chat history
+
+Chat -> User: Display updated UI\n(Streaming components/text)
+deactivate Chat
+
+@enduml
+
